@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import anthropic
 from fde_intel.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from fde_intel.exceptions import AgentError
 from fde_intel.models import AgentFinding, ResearchTask
 from fde_intel.tools.search import search_web
 
@@ -86,16 +87,20 @@ async def _run_agent_with_tools(task: ResearchTask) -> AgentFinding:
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
-            # Extract final text block
             text = next(
                 (b.text for b in response.content if hasattr(b, "text")), ""
             ).strip()
-            # Strip markdown code fences if present
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
-            data = json.loads(text)
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError as e:
+                raise AgentError(
+                    message=f"Failed to parse agent JSON output: {e}",
+                    additional_info={"raw_text": text[:300], "focus": task.focus},
+                ) from e
             return AgentFinding(focus=task.focus, **data)
 
         if response.stop_reason == "tool_use":
@@ -118,7 +123,10 @@ async def _run_agent_with_tools(task: ResearchTask) -> AgentFinding:
             continue
 
         # Unexpected stop reason — surface it
-        raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason}")
+        raise AgentError(
+            message=f"Unexpected stop_reason from Claude API",
+            additional_info={"stop_reason": response.stop_reason, "focus": task.focus},
+        )
 
 
 async def run_tech_agent(topic: str) -> AgentFinding:

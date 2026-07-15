@@ -155,7 +155,8 @@ async def test_agent_loop_raises_on_unexpected_stop_reason():
     with patch("fde_intel.agents._client") as mock_client:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
         from fde_intel.agents import run_risk_agent
-        with pytest.raises(RuntimeError, match="Unexpected stop_reason"):
+        from fde_intel.exceptions import AgentError
+        with pytest.raises(AgentError):
             await run_risk_agent("Snowflake")
 
 

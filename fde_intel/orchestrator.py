@@ -4,6 +4,7 @@ import asyncio
 import json
 import anthropic
 from fde_intel.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from fde_intel.exceptions import SynthesisError
 from fde_intel.models import AgentFinding, FDEBriefing, FDEReadinessScore
 from fde_intel.agents import (
     run_tech_agent,
@@ -62,7 +63,13 @@ async def _synthesize(
         text = text.split("```")[1]
         if text.startswith("json"):
             text = text[4:]
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise SynthesisError(
+            message=f"Synthesis returned invalid JSON: {e}",
+            additional_info={"raw_text": text[:300]},
+        ) from e
 
 
 async def run_research(target: str) -> FDEBriefing:

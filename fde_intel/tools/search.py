@@ -2,6 +2,7 @@
 from __future__ import annotations
 import httpx
 from fde_intel.config import TAVILY_API_KEY, MAX_SEARCH_RESULTS, REQUEST_TIMEOUT
+from fde_intel.exceptions import SearchError
 
 
 async def _search_tavily(query: str, max_results: int) -> list[dict]:
@@ -61,6 +62,14 @@ async def _search_duckduckgo(query: str, max_results: int) -> list[dict]:
 
 async def search_web(query: str, max_results: int = MAX_SEARCH_RESULTS) -> list[dict]:
     """Search the web. Uses Tavily if API key set, falls back to DuckDuckGo."""
-    if TAVILY_API_KEY:
-        return await _search_tavily(query, max_results)
-    return await _search_duckduckgo(query, max_results)
+    try:
+        if TAVILY_API_KEY:
+            return await _search_tavily(query, max_results)
+        return await _search_duckduckgo(query, max_results)
+    except SearchError:
+        raise
+    except Exception as e:
+        raise SearchError(
+            message=f"Search failed for query '{query}': {e}",
+            additional_info={"query": query, "provider": "tavily" if TAVILY_API_KEY else "duckduckgo"},
+        ) from e

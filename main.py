@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 import typer
 from rich.console import Console
+from fde_intel.config import validate_config
+from fde_intel.exceptions import FDEError
 from fde_intel.orchestrator import run_research
 from fde_intel.reporter import render_terminal, render_markdown
 
@@ -17,10 +19,21 @@ def research(
     output: bool = typer.Option(False, "--output", "-o", help="Save briefing as markdown to reports/output/"),
 ):
     """Run multi-agent research on a technology and generate an FDE briefing."""
+    try:
+        validate_config()
+    except FDEError as e:
+        console.print(f"\n[red]Configuration error:[/red] {e.get_user_facing_message()}")
+        raise typer.Exit(1)
+
     console.print(f"\n[bold cyan]Researching:[/bold cyan] {target}")
     console.print("[dim]Spawning 4 specialist agents in parallel...[/dim]\n")
 
-    briefing = asyncio.run(run_research(target))
+    try:
+        briefing = asyncio.run(run_research(target))
+    except FDEError as e:
+        console.print(f"\n[red]Error:[/red] {e.get_user_facing_message()}")
+        raise typer.Exit(1)
+
     render_terminal(briefing)
 
     if output:
