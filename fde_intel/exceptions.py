@@ -1,7 +1,4 @@
-"""Structured exceptions — internal debug info stays internal, user-facing message is clean.
-
-Pattern adopted from SAP Concur llm-orchestration internal repo.
-"""
+"""Structured exceptions — internal debug info stays internal, user-facing message is clean."""
 from __future__ import annotations
 from enum import StrEnum
 from typing import Any

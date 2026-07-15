@@ -23,7 +23,6 @@ def coerce_model_params(params: dict[str, Any]) -> dict[str, Any]:
     """Normalise model param types — string '10' → int 10, int 1 → float 1.0.
 
     Prevents provider SDK type errors when params come from CLI flags or config files.
-    Pattern adopted from SAP Concur llm-orchestration internal repo.
     """
     result = dict(params)
     for key in _INT_PARAMS & result.keys():

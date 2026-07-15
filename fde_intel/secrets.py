@@ -1,6 +1,5 @@
 """File-based secret loader — reads from mounted secret files (Kubernetes style) with env var fallback.
 
-Pattern adopted from SAP Concur llm-orchestration internal repo.
 Locally: set ANTHROPIC_API_KEY / TAVILY_API_KEY as env vars (via .env).
 In deployment: mount secrets as files under SECRETS_MOUNT_PATH.
 """
