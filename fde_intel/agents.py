@@ -68,6 +68,16 @@ _SYSTEM_PROMPTS: dict[str, str] = {
     ),
 }
 
+def _cached_system(focus: str) -> list[dict]:
+    """Wrap system prompt in a cache_control block.
+
+    System prompts are stable across all runs — caching saves ~90% on
+    subsequent requests. Minimum 1024 tokens to cache on Sonnet 4.6;
+    prompts here are shorter so cache writes are attempted but may not
+    activate. Kept for forward compatibility when prompts grow.
+    """
+    return [{"type": "text", "text": _SYSTEM_PROMPTS[focus], "cache_control": {"type": "ephemeral"}}]
+
 _USER_PROMPT = (
     "Research target: {topic}\n"
     "Specific focus: {query}\n\n"
@@ -105,7 +115,7 @@ async def _run_native(task: ResearchTask) -> AgentFinding:
     response = await _client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=2048,
-        system=_SYSTEM_PROMPTS[task.focus],
+        system=_cached_system(task.focus),
         tools=[_NATIVE_SEARCH_TOOL],
         messages=[{
             "role": "user",
@@ -138,7 +148,7 @@ async def _run_fallback(task: ResearchTask) -> AgentFinding:
         response = await _client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=2048,
-            system=_SYSTEM_PROMPTS[task.focus],
+            system=_cached_system(task.focus),
             tools=[_FALLBACK_TOOL_DEF],
             messages=messages,
         )
