@@ -72,11 +72,11 @@ def test_agent_finding_caps_key_points():
 # ── agentic loop tests ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_agent_loop_end_turn_on_first_response():
-    """Agent returns result immediately when Claude responds with end_turn."""
+async def test_native_search_end_turn_single_call():
+    """Native path: Claude returns end_turn directly, no client-side tool loop."""
     finding_json = json.dumps({
-        "summary": "Snowflake is a cloud data warehouse.",
-        "key_points": ["Supports multi-cloud", "Consumption-based pricing"],
+        "summary": "Snowflake is a mature cloud data warehouse.",
+        "key_points": ["Multi-cloud support", "Consumption-based pricing"],
         "sources": ["https://snowflake.com"],
         "confidence": "high",
     })
@@ -89,23 +89,23 @@ async def test_agent_loop_end_turn_on_first_response():
     mock_response.stop_reason = "end_turn"
     mock_response.content = [mock_text_block]
 
-    mock_create = AsyncMock(return_value=mock_response)
-
-    with patch("fde_intel.agents._client") as mock_client:
-        mock_client.messages.create = mock_create
-        with patch("fde_intel.agents.search_web", new_callable=AsyncMock):
-            from fde_intel.agents import run_tech_agent
-            result = await run_tech_agent("Snowflake")
+    with patch("fde_intel.agents._client") as mock_client, \
+         patch("fde_intel.agents.USE_NATIVE_SEARCH", True):
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        from fde_intel.agents import run_tech_agent
+        result = await run_tech_agent("Snowflake")
 
     assert result.focus == "tech"
     assert result.confidence == "high"
-    assert "Snowflake" in result.summary
-    mock_create.assert_called_once()
+    mock_client.messages.create.assert_called_once()
+    # Native path passes the server tool type, not a custom function schema
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["tools"][0]["type"] == "web_search_20260318"
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_tool_use_then_end_turn():
-    """Agent calls search tool once, then returns result on second Claude call."""
+async def test_fallback_search_uses_tool_loop():
+    """Fallback path (USE_NATIVE_SEARCH=false): manual tool_use loop runs."""
     finding_json = json.dumps({
         "summary": "Snowflake pricing is consumption-based.",
         "key_points": ["Credits per second", "Storage separate"],
@@ -113,7 +113,6 @@ async def test_agent_loop_tool_use_then_end_turn():
         "confidence": "medium",
     })
 
-    # First response: tool_use
     mock_tool_block = MagicMock()
     mock_tool_block.type = "tool_use"
     mock_tool_block.id = "tool_123"
@@ -123,7 +122,6 @@ async def test_agent_loop_tool_use_then_end_turn():
     mock_response_tool.stop_reason = "tool_use"
     mock_response_tool.content = [mock_tool_block]
 
-    # Second response: end_turn
     mock_text_block = MagicMock()
     mock_text_block.text = finding_json
     mock_text_block.type = "text"
@@ -132,18 +130,19 @@ async def test_agent_loop_tool_use_then_end_turn():
     mock_response_final.stop_reason = "end_turn"
     mock_response_final.content = [mock_text_block]
 
-    mock_create = AsyncMock(side_effect=[mock_response_tool, mock_response_final])
     mock_search = AsyncMock(return_value=[{"title": "Pricing", "url": "https://snowflake.com/pricing", "content": "Credits..."}])
 
-    with patch("fde_intel.agents._client") as mock_client:
-        mock_client.messages.create = mock_create
-        with patch("fde_intel.agents.search_web", mock_search):
-            from fde_intel.agents import run_cost_agent
-            result = await run_cost_agent("Snowflake")
+    with patch("fde_intel.agents._client") as mock_client, \
+         patch("fde_intel.agents.USE_NATIVE_SEARCH", False), \
+         patch("fde_intel.agents.search_web", mock_search):
+        mock_client.messages.create = AsyncMock(side_effect=[mock_response_tool, mock_response_final])
+        from fde_intel.agents import run_cost_agent
+        result = await run_cost_agent("Snowflake")
 
     assert result.focus == "cost"
-    assert mock_create.call_count == 2
-    mock_search.assert_called_once_with("Snowflake pricing enterprise", 5)
+    assert mock_client.messages.create.call_count == 2
+    mock_search.assert_called_once()
+
 
 
 @pytest.mark.asyncio

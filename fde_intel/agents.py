@@ -2,14 +2,27 @@
 from __future__ import annotations
 import json
 import anthropic
-from fde_intel.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from fde_intel.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, USE_NATIVE_SEARCH
 from fde_intel.exceptions import AgentError
 from fde_intel.models import AgentFinding, ResearchTask
 from fde_intel.tools.search import search_web
 
 _client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
-_TOOL_DEF = {
+# Native Anthropic web_search_20260318 server tool (dynamic filtering).
+# Requires Sonnet 4.6 / Opus 4.7+.
+# response_inclusion: excluded drops raw search blocks from the response,
+# reducing output tokens in agentic workflows.
+_NATIVE_SEARCH_TOOL = {
+    "type": "web_search_20260318",
+    "name": "web_search",
+    "max_uses": 5,
+    "response_inclusion": "excluded",
+}
+
+# Fallback: client-side custom search tool (Tavily / DuckDuckGo).
+# Used when USE_NATIVE_SEARCH=false in .env.
+_FALLBACK_TOOL_DEF = {
     "name": "search_web",
     "description": "Search the web for up-to-date information. Use targeted, specific queries.",
     "input_schema": {
@@ -55,53 +68,88 @@ _SYSTEM_PROMPTS: dict[str, str] = {
     ),
 }
 
+_USER_PROMPT = (
+    "Research target: {topic}\n"
+    "Specific focus: {query}\n\n"
+    "Search the web to gather information, then return a JSON object with exactly these fields:\n"
+    '{{"summary": "...", "key_points": ["...", "..."], "sources": ["url1", "url2"], '
+    '"confidence": "high|medium|low"}}\n\n'
+    "Only return the JSON object — no markdown, no explanation."
+)
 
-async def _run_agent_with_tools(task: ResearchTask) -> AgentFinding:
-    """Agentic loop: Claude calls search_web tool until it has enough to answer."""
-    system = _SYSTEM_PROMPTS[task.focus]
-    messages: list[dict] = [
-        {
+
+def _extract_json(text: str, focus: str) -> AgentFinding:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise AgentError(
+            message=f"Failed to parse agent JSON output: {e}",
+            additional_info={"raw_text": text[:300], "focus": focus},
+        ) from e
+    return AgentFinding(focus=focus, **data)
+
+
+async def _run_native(task: ResearchTask) -> AgentFinding:
+    """Native path: Anthropic web_search_20260318 server tool with dynamic filtering.
+
+    Claude handles the full search orchestration server-side — dynamic filtering
+    uses a sandboxed code execution environment to filter results before they
+    reach the context window, reducing token consumption. No client-side
+    tool_use loop needed; stop_reason is end_turn directly.
+    """
+    response = await _client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=2048,
+        system=_SYSTEM_PROMPTS[task.focus],
+        tools=[_NATIVE_SEARCH_TOOL],
+        messages=[{
             "role": "user",
-            "content": (
-                f"Research target: {task.topic}\n"
-                f"Specific focus: {task.query}\n\n"
-                "Use the search_web tool to gather information, then return a JSON object with exactly "
-                "these fields:\n"
-                '{"summary": "...", "key_points": ["...", "..."], "sources": ["url1", "url2"], '
-                '"confidence": "high|medium|low"}\n\n'
-                "Only return the JSON object — no markdown, no explanation."
-            ),
-        }
-    ]
+            "content": _USER_PROMPT.format(topic=task.topic, query=task.query),
+        }],
+    )
+
+    if response.stop_reason not in ("end_turn", "tool_use"):
+        raise AgentError(
+            message="Unexpected stop_reason from Claude API",
+            additional_info={"stop_reason": response.stop_reason, "focus": task.focus},
+        )
+
+    text = next((b.text for b in response.content if hasattr(b, "text")), "")
+    return _extract_json(text, task.focus)
+
+
+async def _run_fallback(task: ResearchTask) -> AgentFinding:
+    """Fallback path: client-side Tavily/DuckDuckGo tool loop.
+
+    Active when USE_NATIVE_SEARCH=false. Runs a manual agentic loop —
+    Claude calls the search_web tool, results returned client-side.
+    """
+    messages: list[dict] = [{
+        "role": "user",
+        "content": _USER_PROMPT.format(topic=task.topic, query=task.query),
+    }]
 
     while True:
         response = await _client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=2048,
-            system=system,
-            tools=[_TOOL_DEF],
+            system=_SYSTEM_PROMPTS[task.focus],
+            tools=[_FALLBACK_TOOL_DEF],
             messages=messages,
         )
 
-        # Append assistant turn
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
             text = next(
                 (b.text for b in response.content if hasattr(b, "text")), ""
-            ).strip()
-            if text.startswith("```"):
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError as e:
-                raise AgentError(
-                    message=f"Failed to parse agent JSON output: {e}",
-                    additional_info={"raw_text": text[:300], "focus": task.focus},
-                ) from e
-            return AgentFinding(focus=task.focus, **data)
+            )
+            return _extract_json(text, task.focus)
 
         if response.stop_reason == "tool_use":
             tool_results = []
@@ -112,42 +160,45 @@ async def _run_agent_with_tools(task: ResearchTask) -> AgentFinding:
                     block.input["query"],
                     block.input.get("max_results", 5),
                 )
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(results),
-                    }
-                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(results),
+                })
             messages.append({"role": "user", "content": tool_results})
             continue
 
-        # Unexpected stop reason — surface it
         raise AgentError(
-            message=f"Unexpected stop_reason from Claude API",
+            message="Unexpected stop_reason from Claude API",
             additional_info={"stop_reason": response.stop_reason, "focus": task.focus},
         )
 
 
+async def _run_agent(task: ResearchTask) -> AgentFinding:
+    if USE_NATIVE_SEARCH:
+        return await _run_native(task)
+    return await _run_fallback(task)
+
+
 async def run_tech_agent(topic: str) -> AgentFinding:
-    return await _run_agent_with_tools(
+    return await _run_agent(
         ResearchTask(topic=topic, focus="tech", query=f"{topic} technical architecture integrations API enterprise")
     )
 
 
 async def run_cost_agent(topic: str) -> AgentFinding:
-    return await _run_agent_with_tools(
+    return await _run_agent(
         ResearchTask(topic=topic, focus="cost", query=f"{topic} pricing licensing cost enterprise 2025 2026")
     )
 
 
 async def run_risk_agent(topic: str) -> AgentFinding:
-    return await _run_agent_with_tools(
+    return await _run_agent(
         ResearchTask(topic=topic, focus="risk", query=f"{topic} risks problems outages security issues enterprise deployment")
     )
 
 
 async def run_competitor_agent(topic: str) -> AgentFinding:
-    return await _run_agent_with_tools(
+    return await _run_agent(
         ResearchTask(topic=topic, focus="competitors", query=f"{topic} alternatives competitors comparison enterprise 2025 2026")
     )

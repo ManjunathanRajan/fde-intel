@@ -9,12 +9,14 @@ load_dotenv()
 
 ANTHROPIC_API_KEY: str = get_secret("ANTHROPIC_API_KEY", "fde-intel", "anthropic-api-key")
 TAVILY_API_KEY: str = get_secret("TAVILY_API_KEY", "fde-intel", "tavily-api-key")
-CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20251001")
+CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+# Set USE_NATIVE_SEARCH=false to fall back to Tavily/DuckDuckGo
+USE_NATIVE_SEARCH: bool = os.getenv("USE_NATIVE_SEARCH", "true").lower() != "false"
 
 MAX_SEARCH_RESULTS: int = 5
 REQUEST_TIMEOUT: int = 30
 
-# Known Claude API numeric params — coerced on ingestion
 _INT_PARAMS: set[str] = {"max_tokens"}
 _FLOAT_PARAMS: set[str] = {"temperature", "top_p"}
 
