@@ -4,7 +4,7 @@ import asyncio
 import json
 import anthropic
 from fde_intel.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
-from fde_intel.models import AgentFinding, FDEBriefing
+from fde_intel.models import AgentFinding, FDEBriefing, FDEReadinessScore
 from fde_intel.agents import (
     run_tech_agent,
     run_cost_agent,
@@ -14,20 +14,6 @@ from fde_intel.agents import (
 
 _client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
-_COMPLEXITY_MAP = {
-    ("high", "high"): "high",
-    ("high", "medium"): "high",
-    ("medium", "high"): "high",
-    ("medium", "medium"): "medium",
-    ("low", "low"): "low",
-}
-
-
-def _infer_complexity(tech: AgentFinding, risk: AgentFinding) -> str:
-    return _COMPLEXITY_MAP.get(
-        (tech.confidence, risk.confidence), "medium"
-    )
-
 
 async def _synthesize(
     target: str,
@@ -35,25 +21,40 @@ async def _synthesize(
     cost: AgentFinding,
     risk: AgentFinding,
     competitors: AgentFinding,
-) -> tuple[str, list[str]]:
-    """Ask Claude to produce executive summary + recommended client questions."""
+) -> dict:
+    """Claude reasons over all 4 findings to produce synthesis fields."""
     prompt = (
-        f"You are a Forward Deployed Engineer preparing for a first call with a client "
-        f"considering {target}.\n\n"
-        f"TECH FINDINGS: {tech.summary}\n"
-        f"COST SIGNALS: {cost.summary}\n"
-        f"RISK FLAGS: {risk.summary}\n"
-        f"COMPETITORS: {competitors.summary}\n\n"
-        "Return a JSON object with exactly two fields:\n"
-        '{"executive_summary": "2-3 sentence briefing for a non-technical stakeholder", '
-        '"recommended_questions": ["question1", "question2", ...]}\n\n'
-        "The recommended_questions should be 4-6 sharp, specific questions an FDE should ask the "
-        "client to qualify the deal and uncover deployment complexity. "
-        "Only return the JSON — no markdown, no explanation."
+        f"You are a senior Forward Deployed Engineer preparing a pre-call briefing on: {target}\n\n"
+        f"TECH FINDINGS:\n{tech.summary}\nKey points: {tech.key_points}\n\n"
+        f"COST SIGNALS:\n{cost.summary}\nKey points: {cost.key_points}\n\n"
+        f"RISK FLAGS:\n{risk.summary}\nKey points: {risk.key_points}\n\n"
+        f"COMPETITOR LANDSCAPE:\n{competitors.summary}\nKey points: {competitors.key_points}\n\n"
+        "Based on ALL findings above, return a JSON object with exactly these fields:\n"
+        "{\n"
+        '  "executive_summary": "2-3 sentence briefing for a non-technical stakeholder",\n'
+        '  "integration_complexity": "low|medium|high — based on tech architecture, number of integration points, and risk flags. NOT based on confidence scores.",\n'
+        '  "fde_readiness_score": {\n'
+        '    "score": <integer 0-100>,\n'
+        '    "grade": "A|B|C|D|F",\n'
+        '    "rationale": "2-3 sentences explaining the score based on tech maturity, cost clarity, risk level, and competitive position",\n'
+        '    "blockers": ["hard blocker 1", ...],\n'
+        '    "accelerators": ["factor that speeds deployment", ...]\n'
+        "  },\n"
+        '  "recommended_questions": ["question for client 1", ...]\n'
+        "}\n\n"
+        "Scoring guide for fde_readiness_score:\n"
+        "90-100 (A): Mature tech, clear pricing, low risk, weak competition — deploy immediately\n"
+        "70-89 (B): Good fit with minor gaps — proceed with caveats\n"
+        "50-69 (C): Significant concerns in 1-2 areas — proceed cautiously\n"
+        "30-49 (D): Major blockers present — needs deeper discovery\n"
+        "0-29 (F): Not deployment-ready — critical risks or poor fit\n\n"
+        "The recommended_questions should be 4-6 sharp questions to uncover deployment complexity "
+        "and qualify the deal. Only return the JSON — no markdown, no explanation."
     )
+
     response = await _client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=1024,
+        max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )
     text = response.content[0].text.strip()
@@ -61,8 +62,7 @@ async def _synthesize(
         text = text.split("```")[1]
         if text.startswith("json"):
             text = text[4:]
-    data = json.loads(text)
-    return data["executive_summary"], data["recommended_questions"]
+    return json.loads(text)
 
 
 async def run_research(target: str) -> FDEBriefing:
@@ -74,9 +74,7 @@ async def run_research(target: str) -> FDEBriefing:
         run_competitor_agent(target),
     )
 
-    executive_summary, recommended_questions = await _synthesize(
-        target, tech, cost, risk, competitors
-    )
+    synthesis = await _synthesize(target, tech, cost, risk, competitors)
 
     return FDEBriefing(
         target=target,
@@ -84,7 +82,8 @@ async def run_research(target: str) -> FDEBriefing:
         cost_signals=cost,
         risk_flags=risk,
         competitor_landscape=competitors,
-        integration_complexity=_infer_complexity(tech, risk),
-        recommended_questions=recommended_questions,
-        executive_summary=executive_summary,
+        integration_complexity=synthesis["integration_complexity"],
+        fde_readiness_score=FDEReadinessScore(**synthesis["fde_readiness_score"]),
+        recommended_questions=synthesis["recommended_questions"],
+        executive_summary=synthesis["executive_summary"],
     )

@@ -18,6 +18,20 @@ class AgentFinding(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
 
 
+class FDEReadinessScore(BaseModel):
+    score: int = Field(ge=0, le=100, description="0-100 FDE readiness score")
+    grade: Literal["A", "B", "C", "D", "F"]
+    rationale: str = Field(description="2-3 sentence explanation of the score")
+    blockers: list[str] = Field(
+        default_factory=list,
+        description="Hard blockers that must be resolved before deployment",
+    )
+    accelerators: list[str] = Field(
+        default_factory=list,
+        description="Factors that will speed up deployment",
+    )
+
+
 class FDEBriefing(BaseModel):
     target: str
     tech_fit: AgentFinding
@@ -25,6 +39,7 @@ class FDEBriefing(BaseModel):
     risk_flags: AgentFinding
     competitor_landscape: AgentFinding
     integration_complexity: Literal["low", "medium", "high"]
+    fde_readiness_score: FDEReadinessScore
     recommended_questions: list[str] = Field(
         description="Questions the FDE should ask the client on first call",
         min_length=3,

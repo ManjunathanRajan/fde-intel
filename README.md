@@ -72,33 +72,51 @@ python main.py research "Salesforce Data Cloud"
 
 ## Output
 
+Terminal output with Rich formatting. A full sample briefing is in [`sample_outputs/snowflake_briefing.md`](sample_outputs/snowflake_briefing.md).
+
 ```
 ╔══════════════════════════════════════╗
 ║    FDE Intelligence Briefing         ║
 ║    Snowflake                         ║
 ╚══════════════════════════════════════╝
 
-┌─ Executive Summary ──────────────────┐
-│ Snowflake is a mature cloud data     │
-│ warehouse with strong enterprise     │
-│ adoption...                          │
-└──────────────────────────────────────┘
+┌─ Executive Summary ───────────────────────────────────────────┐
+│ Snowflake is a mature cloud data warehouse with strong        │
+│ enterprise traction. Pricing is consumption-based and can     │
+│ scale unpredictably without query governance...               │
+└───────────────────────────────────────────────────────────────┘
+
+┌─ FDE Readiness Score ─────────────────────────────────────────┐
+│ Grade: B  Score: 82/100                                       │
+│ ████████░░                                                    │
+│ Mature platform with clear pricing and manageable risks.      │
+│                                                               │
+│ Blockers:                                                     │
+│   ✗ Existing Redshift contracts must expire first            │
+│ Accelerators:                                                 │
+│   ✓ Pre-built connectors for major ETL tools                 │
+└───────────────────────────────────────────────────────────────┘
 
 Integration Complexity: MEDIUM
 
-┌─ Technical Fit (confidence: high) ───┐
-│ ...                                  │
-└──────────────────────────────────────┘
-
-┌─ Recommended Client Questions ───────┐
-│ 1. What is your current data volume? │
-│ 2. Do you have existing Snowflake... │
-└──────────────────────────────────────┘
+┌─ Recommended Client Questions ────────────────────────────────┐
+│ 1. What is your current data warehouse? When does contract    │
+│    expire?                                                    │
+│ 2. Do you have active ML workloads or is this pure analytics? │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Stack
+## What makes this different
+
+Most multi-agent research tools answer general questions. This one is purpose-built for a specific workflow: an FDE preparing for a client call.
+
+- **FDE Readiness Score (0–100)** — grades deployment readiness across tech, cost, risk, and competitive position. No other tool does this.
+- **Reasoned complexity** — Claude reasons about integration complexity from all 4 findings, not a hardcoded formula.
+- **Client question generator** — produces questions specifically designed to uncover deployment blockers during a sales/discovery call.
+- **Zero-framework implementation** — raw Claude API + asyncio. Every line is readable. No LangChain, no LangGraph.
+- **Works without Tavily** — DuckDuckGo fallback so you can run it with only an Anthropic API key.
 
 | Layer | Choice | Why |
 |---|---|---|

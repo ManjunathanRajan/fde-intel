@@ -1,10 +1,8 @@
 """Render an FDEBriefing to terminal and optionally to a markdown file."""
 from __future__ import annotations
-import json
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 from rich import box
 from fde_intel.models import FDEBriefing
 
@@ -12,6 +10,7 @@ console = Console()
 
 _COMPLEXITY_COLOR = {"low": "green", "medium": "yellow", "high": "red"}
 _CONFIDENCE_COLOR = {"high": "green", "medium": "yellow", "low": "red"}
+_GRADE_COLOR = {"A": "green", "B": "cyan", "C": "yellow", "D": "red", "F": "bright_red"}
 
 
 def render_terminal(briefing: FDEBriefing) -> None:
@@ -27,24 +26,35 @@ def render_terminal(briefing: FDEBriefing) -> None:
         Panel(briefing.executive_summary, title="Executive Summary", border_style="cyan")
     )
 
+    # Readiness score block
+    score = briefing.fde_readiness_score
+    grade_color = _GRADE_COLOR[score.grade]
+    score_bar = "█" * (score.score // 10) + "░" * (10 - score.score // 10)
+    blockers_text = "\n".join(f"  ✗ {b}" for b in score.blockers) if score.blockers else "  None"
+    accelerators_text = "\n".join(f"  ✓ {a}" for a in score.accelerators) if score.accelerators else "  None"
+    console.print(Panel(
+        f"[{grade_color}]Grade: {score.grade}  Score: {score.score}/100[/{grade_color}]\n"
+        f"[dim]{score_bar}[/dim]\n\n"
+        f"{score.rationale}\n\n"
+        f"[red]Blockers:[/red]\n{blockers_text}\n\n"
+        f"[green]Accelerators:[/green]\n{accelerators_text}",
+        title="FDE Readiness Score",
+        border_style=grade_color,
+    ))
+
     complexity_color = _COMPLEXITY_COLOR[briefing.integration_complexity]
     console.print(
         f"\n[bold]Integration Complexity:[/bold] "
         f"[{complexity_color}]{briefing.integration_complexity.upper()}[/{complexity_color}]"
     )
 
-    for finding in [
-        briefing.tech_fit,
-        briefing.cost_signals,
-        briefing.risk_flags,
-        briefing.competitor_landscape,
-    ]:
-        title_map = {
-            "tech": "Technical Fit",
-            "cost": "Cost Signals",
-            "risk": "Risk Flags",
-            "competitors": "Competitor Landscape",
-        }
+    title_map = {
+        "tech": "Technical Fit",
+        "cost": "Cost Signals",
+        "risk": "Risk Flags",
+        "competitors": "Competitor Landscape",
+    }
+    for finding in [briefing.tech_fit, briefing.cost_signals, briefing.risk_flags, briefing.competitor_landscape]:
         conf_color = _CONFIDENCE_COLOR[finding.confidence]
         title = (
             f"{title_map[finding.focus]}  "
@@ -65,8 +75,24 @@ def render_markdown(briefing: FDEBriefing, output_dir: Path) -> Path:
     slug = briefing.target.lower().replace(" ", "_")
     path = output_dir / f"{slug}_briefing.md"
 
+    score = briefing.fde_readiness_score
+    blockers_md = "\n".join(f"- ✗ {b}" for b in score.blockers) or "- None"
+    accelerators_md = "\n".join(f"- ✓ {a}" for a in score.accelerators) or "- None"
+
     lines = [
         f"# FDE Intelligence Briefing: {briefing.target}",
+        "",
+        "## FDE Readiness Score",
+        "",
+        f"**Grade: {score.grade} — {score.score}/100**",
+        "",
+        score.rationale,
+        "",
+        "**Blockers:**",
+        blockers_md,
+        "",
+        "**Accelerators:**",
+        accelerators_md,
         "",
         f"**Integration Complexity:** {briefing.integration_complexity.upper()}",
         "",
@@ -82,12 +108,7 @@ def render_markdown(briefing: FDEBriefing, output_dir: Path) -> Path:
         "risk": "Risk Flags",
         "competitors": "Competitor Landscape",
     }
-    for finding in [
-        briefing.tech_fit,
-        briefing.cost_signals,
-        briefing.risk_flags,
-        briefing.competitor_landscape,
-    ]:
+    for finding in [briefing.tech_fit, briefing.cost_signals, briefing.risk_flags, briefing.competitor_landscape]:
         lines += [
             f"## {section_titles[finding.focus]}",
             f"_Confidence: {finding.confidence}_",
@@ -103,10 +124,7 @@ def render_markdown(briefing: FDEBriefing, output_dir: Path) -> Path:
                 lines.append(f"- {src}")
         lines.append("")
 
-    lines += [
-        "## Recommended Client Questions",
-        "",
-    ]
+    lines += ["## Recommended Client Questions", ""]
     for i, q in enumerate(briefing.recommended_questions, 1):
         lines.append(f"{i}. {q}")
 
